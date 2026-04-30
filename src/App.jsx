@@ -1,72 +1,81 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import UploadZone from './components/UploadZone.jsx';
 import DataPreview from './components/DataPreview.jsx';
 import StatsGrid from './components/StatsGrid.jsx';
 import ChartPanel from './components/ChartPanel.jsx';
 import InsightReport from './components/InsightReport.jsx';
 import { parseCsvFile, rowsToCompactCsv } from './utils/csvParser.js';
-import { computeNumericStats } from './utils/statsEngine.js';
+import { computeNumericStats, detectAnomalyRows, computeThresholdBreaches } from './utils/statsEngine.js';
 import { detectColumnTypes } from './utils/typeDetector.js';
 
-const styles = {
+const S = {
   page: {
     minHeight: '100vh',
     background: '#0b0f12',
     color: '#d8e0df',
-    fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    fontFamily: '"IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, sans-serif',
   },
-  shell: {
-    maxWidth: 1480,
-    margin: '0 auto',
-    padding: '28px clamp(16px, 3vw, 42px) 48px'
-  },
-  header: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) auto',
-    gap: 20,
-    alignItems: 'end',
-    marginBottom: 22
-  },
+  shell: { maxWidth: 1480, margin: '0 auto', padding: '28px clamp(16px, 3vw, 42px) 64px' },
+  header: { marginBottom: 32 },
   eyebrow: {
-    color: '#88a09a',
-    fontSize: 12,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    fontWeight: 800
+    color: '#4caf7d', fontSize: 11, textTransform: 'uppercase',
+    letterSpacing: 2, fontWeight: 700, marginBottom: 10,
+    display: 'flex', alignItems: 'center', gap: 8,
   },
-  h1: {
-    margin: '6px 0 8px',
-    fontSize: 'clamp(30px, 4vw, 52px)',
-    lineHeight: 1,
-    letterSpacing: 0,
-    color: '#f0f5f1'
+  eyebrowDot: { width: 6, height: 6, borderRadius: '50%', background: '#4caf7d', display: 'inline-block' },
+  h1: { margin: '0 0 10px', fontSize: 'clamp(28px, 4vw, 48px)', lineHeight: 1.05, color: '#f0f5f1', fontWeight: 800 },
+  sub: { maxWidth: 680, margin: 0, color: '#6a8880', lineHeight: 1.6, fontSize: 14 },
+  divider: { height: 1, background: '#1a2820', margin: '28px 0' },
+  section: { marginBottom: 36 },
+  sectionHeader: {
+    display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 14,
   },
-  sub: {
-    maxWidth: 760,
-    margin: 0,
-    color: '#a8b6b1',
-    lineHeight: 1.55,
-    fontSize: 15
+  stepBadge: {
+    fontSize: 10, fontWeight: 800, color: '#4caf7d',
+    border: '1px solid #1e3a28', borderRadius: 4,
+    padding: '2px 8px', letterSpacing: 1,
   },
-  section: {
-    marginTop: 18
-  },
-  sectionTitle: {
-    color: '#dce6e1',
-    fontSize: 16,
-    margin: '0 0 10px',
-    fontWeight: 900
-  },
+  sectionTitle: { color: '#dce6e1', fontSize: 15, fontWeight: 800, margin: 0 },
+  sectionSub: { color: '#4a5e58', fontSize: 12, marginLeft: 'auto' },
   error: {
-    marginTop: 14,
-    border: '1px solid #813a34',
-    background: '#261311',
-    color: '#ffb4a8',
-    borderRadius: 6,
-    padding: 12,
-    fontSize: 14
-  }
+    border: '1px solid #5a2020', background: '#140a0a',
+    color: '#f87171', borderRadius: 6, padding: '10px 14px', fontSize: 13, marginBottom: 20,
+  },
+  alertBar: (level) => ({
+    display: 'flex', alignItems: 'center', gap: 10,
+    padding: '10px 16px', borderRadius: 6, marginBottom: 12, fontSize: 13,
+    background: level === 'critical' ? '#1a0808' : '#1a1008',
+    border: `1px solid ${level === 'critical' ? '#5a1a1a' : '#4a3010'}`,
+    color: level === 'critical' ? '#f87171' : '#fb923c',
+  }),
+  exportRow: { display: 'flex', gap: 10, marginTop: 16, flexWrap: 'wrap' },
+  exportBtn: {
+    background: '#0f1614', border: '1px solid #2a3a35',
+    color: '#88c9a4', borderRadius: 6, padding: '8px 16px',
+    fontSize: 12, cursor: 'pointer', fontWeight: 600,
+    display: 'flex', alignItems: 'center', gap: 6,
+  },
 };
+
+function SectionHead({ step, title, sub }) {
+  return (
+    <div style={S.sectionHeader}>
+      <span style={S.stepBadge}>STEP {step}</span>
+      <h2 style={S.sectionTitle}>{title}</h2>
+      {sub && <span style={S.sectionSub}>{sub}</span>}
+    </div>
+  );
+}
+
+function buildLocalCharts(columns, stats) {
+  const numeric = stats.map((s) => s.column);
+  if (!numeric.length) return [];
+  const x = numeric[0], y = numeric[1] || numeric[0];
+  return [
+    { type: 'bar', x, y, title: `${y} by ${x}` },
+    { type: 'line', x, y, title: `${y} trend` },
+  ];
+}
 
 export default function App() {
   const [dataset, setDataset] = useState(null);
@@ -75,145 +84,183 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [insightLoading, setInsightLoading] = useState(false);
   const [error, setError] = useState('');
-  const analyzedDatasetRef = useRef(null);
+  const [thresholds, setThresholds] = useState({});
+  const analyzedRef = useRef(null);
 
   const numericStats = useMemo(() => {
     if (!dataset) return [];
     return computeNumericStats(dataset.rows, dataset.columns);
   }, [dataset]);
 
+  const anomalyRowSet = useMemo(() => detectAnomalyRows(dataset?.rows || [], numericStats), [numericStats, dataset]);
+
+  const thresholdBreaches = useMemo(() => {
+    if (!dataset) return [];
+    return computeThresholdBreaches(dataset.rows, thresholds, numericStats);
+  }, [dataset, thresholds, numericStats]);
+
+  const handleThresholdChange = useCallback((col, field, val) => {
+    setThresholds((prev) => ({
+      ...prev,
+      [col]: { ...prev[col], [field]: val },
+    }));
+  }, []);
+
   const handleFile = async (file) => {
-    setError('');
-    setChartConfig([]);
-    setInsightReport('');
+    setError(''); setChartConfig([]); setInsightReport(''); setThresholds({});
     try {
       const parsed = await parseCsvFile(file);
       const columns = detectColumnTypes(parsed.rows, parsed.fields);
-      setDataset({
-        ...parsed,
-        columns,
-        fileName: file.name,
-        analysisKey: `${file.name}-${file.size}-${file.lastModified}`
-      });
+      setDataset({ ...parsed, columns, fileName: file.name, analysisKey: `${file.name}-${file.size}-${file.lastModified}` });
     } catch (err) {
-      setDataset(null);
-      setError(err.message);
+      setDataset(null); setError(err.message);
     }
   };
 
   useEffect(() => {
-    if (!dataset || analyzedDatasetRef.current === dataset.analysisKey) return;
-    analyzedDatasetRef.current = dataset.analysisKey;
+    if (!dataset || analyzedRef.current === dataset.analysisKey) return;
+    analyzedRef.current = dataset.analysisKey;
 
-    const compactCsv = rowsToCompactCsv(dataset.rows.slice(0, 50), dataset.fields);
-    const analysisPayload = { columns: dataset.columns, stats: numericStats, compactCsv };
+    const payload = {
+      columns: dataset.columns,
+      stats: numericStats,
+      compactCsv: rowsToCompactCsv(dataset.rows.slice(0, 50), dataset.fields),
+    };
 
-    const generateCharts = async () => {
+    setError(''); setChartConfig([]); setInsightReport('');
+
+    // Charts
+    (async () => {
       setLoading(true);
       try {
-        const response = await fetch('/api/analyze', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(analysisPayload)
+        const res = await fetch('/api/analyze', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
         });
-        const payload = await response.json();
-        
-        if (!response.ok) throw new Error(payload.error || 'Analysis request failed.');
-        setChartConfig(payload.charts || []);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Analysis failed.');
+        setChartConfig(data.charts || []);
       } catch (err) {
-        const fallbackCharts = buildLocalCharts(dataset.columns, numericStats);
-        setChartConfig(fallbackCharts);
-        setError(`${err.message} Add GROQ_API_KEY to your backend .env file and restart the server.`);
-      } finally {
-        setLoading(false);
-      }
-    };
+        setChartConfig(buildLocalCharts(dataset.columns, numericStats));
+        setError(err.message);
+      } finally { setLoading(false); }
+    })();
 
-    const generateInsight = async () => {
+    // Insight
+    (async () => {
       setInsightLoading(true);
-      setInsightReport('');
       try {
-        const response = await fetch('/api/insight', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(analysisPayload)
+        const res = await fetch('/api/insight', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
         });
-        const data = await response.json();
-        
-        if (!response.ok) throw new Error(data.error || 'Insight request failed.');
-        setInsightReport(data.report || 'No report returned from server.');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Insight failed.');
+        setInsightReport(data.report || '');
       } catch (err) {
         setInsightReport(`Insight unavailable: ${err.message}`);
-      } finally {
-        setInsightLoading(false);
-      }
-    };
-
-    // Run both independently
-    Promise.allSettled([generateCharts(), generateInsight()]);
+      } finally { setInsightLoading(false); }
+    })();
   }, [dataset, numericStats]);
 
+  const exportStats = () => {
+    if (!numericStats.length) return;
+    const header = 'column,mean,std,min,max,median,nullCount,anomalyCount';
+    const rows = numericStats.map((s) =>
+      [s.column, s.mean?.toFixed(4), s.std?.toFixed(4), s.min, s.max, s.median?.toFixed(4), s.nullCount, s.anomalies.length].join(',')
+    );
+    const blob = new Blob([[header, ...rows].join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'stats-export.csv'; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const criticalBreaches = thresholdBreaches.filter((b) => b.level === 'critical');
+  const warnBreaches = thresholdBreaches.filter((b) => b.level === 'warn');
+  const totalAnomalies = numericStats.reduce((s, n) => s + n.anomalies.length, 0);
+
   return (
-    <main style={styles.page}>
-      <div style={styles.shell}>
-        <header style={styles.header}>
-          <div>
-            <div style={styles.eyebrow}>Operations CSV Data Analyst</div>
-            <h1 style={styles.h1}>Sensor and asset data workbench</h1>
-            <p style={styles.sub}>
-              Upload a CSV, inspect the parsed data, review numeric health signals,
-              and generate Groq-powered charts and analyst notes for maintenance decisions.
-            </p>
-          </div>
+    <main style={S.page}>
+      <div style={S.shell}>
+        {/* Header */}
+        <header style={S.header}>
+          <div style={S.eyebrow}><span style={S.eyebrowDot} /> Operations Intelligence</div>
+          <h1 style={S.h1}>Sensor & Asset Data Workbench</h1>
+          <p style={S.sub}>
+            Upload a CSV to automatically parse, compute stats, detect anomalies, set thresholds, and generate Groq-powered charts and insight reports for maintenance decisions.
+          </p>
         </header>
 
-        <section style={styles.section}>
-          <h2 style={styles.sectionTitle}>Step 1 - Upload</h2>
+        {/* Alert bars */}
+        {criticalBreaches.length > 0 && (
+          <div style={S.alertBar('critical')}>
+            🚨 <strong>{criticalBreaches.length} critical threshold breach{criticalBreaches.length > 1 ? 'es'  : ''}</strong> — {criticalBreaches.slice(0, 3).map((b) => `${b.column} row ${b.rowIndex + 1}`).join(', ')}{criticalBreaches.length > 3 ? '…' : ''}
+          </div>
+        )}
+        {warnBreaches.length > 0 && (
+          <div style={S.alertBar('warn')}>
+            ⚠ <strong>{warnBreaches.length} warning{warnBreaches.length > 1 ? 's' : ''}</strong> — {warnBreaches.slice(0, 3).map((b) => `${b.column} row ${b.rowIndex + 1}`).join(', ')}{warnBreaches.length > 3 ? '…' : ''}
+          </div>
+        )}
+
+        {error && <div style={S.error}>⚠ {error}</div>}
+
+        {/* Step 1 */}
+        <section style={S.section}>
+          <SectionHead step={1} title="Upload CSV" />
           <UploadZone onFile={handleFile} dataset={dataset} />
         </section>
 
-        {error ? <div style={styles.error}>{error}</div> : null}
-
-        {dataset ? (
+        {dataset && (
           <>
-            <section style={styles.section}>
-              <h2 style={styles.sectionTitle}>Step 2 - Data Preview</h2>
-              <DataPreview rows={dataset.rows.slice(0, 10)} columns={dataset.columns} />
-            </section>
+            <div style={S.divider} />
 
-            <section style={styles.section}>
-              <h2 style={styles.sectionTitle}>Step 3 - Stats Panel</h2>
-              <StatsGrid stats={numericStats} totalRows={dataset.rows.length} />
-            </section>
-
-            <section style={styles.section}>
-              <h2 style={styles.sectionTitle}>Step 4 - Charts</h2>
-              <ChartPanel
-                charts={chartConfig}
-                rows={dataset.rows}
-                loading={loading}
-                stats={numericStats}
+            {/* Step 2 */}
+            <section style={S.section}>
+              <SectionHead
+                step={2} title="Data Preview"
+                sub={`${anomalyRowSet.size} anomalous row${anomalyRowSet.size !== 1 ? 's' : ''} highlighted`}
               />
+              <DataPreview rows={dataset.rows.slice(0, 10)} columns={dataset.columns} anomalyRowSet={anomalyRowSet} />
             </section>
 
-            <section style={styles.section}>
-              <h2 style={styles.sectionTitle}>Step 5 - Insight Report</h2>
+            <div style={S.divider} />
+
+            {/* Step 3 */}
+            <section style={S.section}>
+              <SectionHead
+                step={3} title="Stats & Thresholds"
+                sub={totalAnomalies > 0 ? `${totalAnomalies} statistical anomalies detected (>3σ)` : 'No anomalies detected'}
+              />
+              <StatsGrid
+                stats={numericStats}
+                totalRows={dataset.rows.length}
+                thresholds={thresholds}
+                onThresholdChange={handleThresholdChange}
+              />
+              <div style={S.exportRow}>
+                <button style={S.exportBtn} onClick={exportStats}>↓ Export stats CSV</button>
+              </div>
+            </section>
+
+            <div style={S.divider} />
+
+            {/* Step 4 */}
+            <section style={S.section}>
+              <SectionHead step={4} title="Auto-Generated Charts" sub="LLM-selected column pairings" />
+              <ChartPanel charts={chartConfig} rows={dataset.rows} loading={loading} thresholds={thresholds} />
+            </section>
+
+            <div style={S.divider} />
+
+            {/* Step 5 */}
+            <section style={S.section}>
+              <SectionHead step={5} title="Insight Report" sub="Groq / llama-3.3-70b" />
               <InsightReport report={insightReport} loading={insightLoading} />
             </section>
           </>
-        ) : null}
+        )}
       </div>
     </main>
   );
-}
-
-function buildLocalCharts(columns, stats) {
-  const numeric = stats.map((item) => item.column);
-  if (!numeric.length) return [];
-  const x = numeric[0];
-  const y = numeric[1] || numeric[0];
-  return [
-    { type: 'bar', x, y, title: `${y} by ${x}` },
-    { type: 'line', x, y, title: `${y} trend by ${x}` }
-  ];
 }

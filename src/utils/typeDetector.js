@@ -1,54 +1,25 @@
-const idNamePattern = /(^id$|_id$|id_|asset|serial|tag|uuid|guid|code|number$)/i;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$|^\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}$/;
+const NUM_RE = /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/;
+const ID_HINTS = /\b(id|uuid|key|code|ref|serial|no\.?)\b/i;
 
 export function detectColumnTypes(rows, fields) {
-  const totalRows = rows.length || 1;
-
   return fields.map((name) => {
-    const values = rows
-      .map((row) => normalize(row[name]))
-      .filter((value) => value !== '');
-    const uniqueCount = new Set(values).size;
-    const filledRatio = values.length / totalRows;
-    const numericRatio = ratio(values, isNumeric);
-    const dateRatio = ratio(values, isDateLike);
-    const uniqueRatio = values.length ? uniqueCount / values.length : 0;
+    const values = rows.map((r) => r[name]).filter((v) => v !== '' && v != null);
+    if (!values.length) return { name, type: 'categorical' };
 
-    let type = 'categorical';
-    if (values.length && dateRatio >= 0.85) {
-      type = 'datetime';
-    } else if (values.length && numericRatio >= 0.9) {
-      type = uniqueRatio > 0.96 && idNamePattern.test(name) ? 'ID' : 'numeric';
-    } else if (values.length && (idNamePattern.test(name) || (uniqueRatio > 0.88 && values.length > 8))) {
-      type = 'ID';
+    const numericCount = values.filter((v) => NUM_RE.test(String(v).trim())).length;
+    const dateCount = values.filter((v) => DATE_RE.test(String(v).trim())).length;
+    const ratio = values.length;
+
+    if (dateCount / ratio > 0.8) return { name, type: 'datetime' };
+    if (numericCount / ratio > 0.8) {
+      // Check if it looks like an ID column
+      const uniq = new Set(values).size;
+      if (ID_HINTS.test(name) && uniq === values.length) return { name, type: 'id' };
+      return { name, type: 'numeric' };
     }
-
-    return { name, type, uniqueCount, nullCount: totalRows - values.length, filledRatio };
+    const uniq = new Set(values).size;
+    if (ID_HINTS.test(name) && uniq / ratio > 0.9) return { name, type: 'id' };
+    return { name, type: 'categorical' };
   });
-}
-
-function normalize(value) {
-  return String(value ?? '').trim();
-}
-
-function ratio(values, predicate) {
-  if (!values.length) return 0;
-  return values.filter(predicate).length / values.length;
-}
-
-function isNumeric(value) {
-  if (value === '') return false;
-  const cleaned = value.replace(/,/g, '');
-  return cleaned !== '' && Number.isFinite(Number(cleaned));
-}
-
-function isDateLike(value) {
-  const trimmed = value.trim();
-  if (/^\d+(\.\d+)?$/.test(trimmed.replace(/,/g, ''))) return false;
-  const hasDateShape =
-    /\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b/.test(trimmed) ||
-    /\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b/.test(trimmed) ||
-    /\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b/i.test(trimmed);
-  if (!hasDateShape) return false;
-  const timestamp = Date.parse(trimmed);
-  return Number.isFinite(timestamp);
 }

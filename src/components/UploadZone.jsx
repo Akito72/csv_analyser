@@ -1,102 +1,65 @@
-import React, { useRef, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 
-const styles = {
-  zone: {
-    width: '100%',
-    border: '1px dashed #4f625c',
-    background: 'linear-gradient(135deg, #12191b 0%, #0f1516 55%, #171912 100%)',
-    borderRadius: 8,
-    padding: '28px',
-    minHeight: 150,
-    display: 'grid',
-    placeItems: 'center',
+const S = {
+  zone: (drag) => ({
+    border: `2px dashed ${drag ? '#d49b33' : '#2a3a35'}`,
+    borderRadius: 10,
+    background: drag ? 'rgba(212,155,51,0.04)' : '#0f1614',
+    padding: '40px 24px',
     textAlign: 'center',
     cursor: 'pointer',
-    transition: 'border-color 160ms ease, background 160ms ease'
+    transition: 'all 0.18s ease',
+    position: 'relative',
+  }),
+  icon: { fontSize: 36, marginBottom: 10, opacity: 0.5 },
+  label: { color: '#a8b6b1', fontSize: 15, marginBottom: 6 },
+  hint: { color: '#4a5e58', fontSize: 12 },
+  chip: {
+    display: 'inline-flex', alignItems: 'center', gap: 8,
+    marginTop: 16, background: '#1a2820', border: '1px solid #2a3a35',
+    borderRadius: 6, padding: '6px 14px', fontSize: 13, color: '#88c9a4',
   },
-  active: {
-    borderColor: '#d49b33',
-    background: '#171a12'
-  },
-  title: {
-    margin: 0,
-    color: '#edf4ef',
-    fontWeight: 900,
-    fontSize: 22
-  },
-  hint: {
-    margin: '8px 0 0',
-    color: '#91a19b',
-    fontSize: 14
-  },
-  meta: {
-    marginTop: 16,
-    display: 'flex',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    gap: 10
-  },
-  pill: {
-    border: '1px solid #33433e',
-    background: '#0c1112',
-    color: '#c8d5cf',
-    borderRadius: 999,
-    padding: '7px 10px',
-    fontSize: 13,
-    fontWeight: 800
-  },
-  input: {
-    display: 'none'
-  }
+  dot: { width: 7, height: 7, borderRadius: '50%', background: '#4caf7d' },
 };
 
 export default function UploadZone({ onFile, dataset }) {
-  const inputRef = useRef(null);
-  const [active, setActive] = useState(false);
+  const [drag, setDrag] = useState(false);
 
-  const pickFile = (files) => {
-    const file = files?.[0];
-    if (file) onFile(file);
+  const handle = useCallback((file) => {
+    if (!file || !file.name.endsWith('.csv')) return;
+    onFile(file);
+  }, [onFile]);
+
+  const onDrop = (e) => {
+    e.preventDefault(); setDrag(false);
+    handle(e.dataTransfer.files[0]);
   };
 
   return (
     <div
-      role="button"
-      tabIndex={0}
-      style={{ ...styles.zone, ...(active ? styles.active : {}) }}
-      onClick={() => inputRef.current?.click()}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') inputRef.current?.click();
-      }}
-      onDragOver={(event) => {
-        event.preventDefault();
-        setActive(true);
-      }}
-      onDragLeave={() => setActive(false)}
-      onDrop={(event) => {
-        event.preventDefault();
-        setActive(false);
-        pickFile(event.dataTransfer.files);
-      }}
+      style={S.zone(drag)}
+      onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+      onDragLeave={() => setDrag(false)}
+      onDrop={onDrop}
+      onClick={() => document.getElementById('csv-input').click()}
     >
       <input
-        ref={inputRef}
-        type="file"
-        accept=".csv,text/csv"
-        style={styles.input}
-        onChange={(event) => pickFile(event.target.files)}
+        id="csv-input" type="file" accept=".csv"
+        style={{ display: 'none' }}
+        onChange={(e) => handle(e.target.files[0])}
       />
-      <div>
-        <p style={styles.title}>Drop a CSV file here</p>
-        <p style={styles.hint}>or select one from disk</p>
-        {dataset ? (
-          <div style={styles.meta}>
-            <span style={styles.pill}>{dataset.fileName}</span>
-            <span style={styles.pill}>{dataset.rowCount.toLocaleString()} rows</span>
-            <span style={styles.pill}>{dataset.columnCount.toLocaleString()} columns</span>
-          </div>
-        ) : null}
+      <div style={S.icon}>📂</div>
+      <div style={S.label}>
+        {drag ? 'Drop it' : 'Drag & drop a CSV, or click to browse'}
       </div>
+      <div style={S.hint}>.csv files only</div>
+
+      {dataset && (
+        <div style={S.chip}>
+          <span style={S.dot} />
+          {dataset.fileName} — {dataset.rows.length.toLocaleString()} rows × {dataset.columns.length} cols
+        </div>
+      )}
     </div>
   );
 }

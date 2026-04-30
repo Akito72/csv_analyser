@@ -1,158 +1,131 @@
 import React from 'react';
 import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Scatter,
-  ScatterChart,
-  Tooltip,
-  XAxis,
-  YAxis
+  LineChart, Line, BarChart, Bar, ScatterChart, Scatter,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  ReferenceLine, Legend,
 } from 'recharts';
-import { toNumber } from '../utils/statsEngine.js';
 
-const styles = {
-  grid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(310px, 1fr))',
-    gap: 14
-  },
-  panel: {
-    border: '1px solid #2a3834',
-    background: '#111716',
-    borderRadius: 8,
-    padding: 14,
-    minHeight: 330
-  },
-  title: {
-    margin: '0 0 12px',
-    fontSize: 15,
-    color: '#edf4ef',
-    fontWeight: 900,
-    overflowWrap: 'anywhere'
-  },
-  empty: {
-    border: '1px solid #2a3834',
-    background: '#111716',
-    borderRadius: 8,
-    padding: 18,
-    color: '#9fb0aa'
-  },
+const COLORS = ['#4caf7d', '#d49b33', '#7c93e8'];
+
+const S = {
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))', gap: 16 },
+  card: { background: '#0f1614', border: '1px solid #1e2e28', borderRadius: 8, padding: '16px 18px' },
+  title: { fontWeight: 800, fontSize: 13, color: '#88c9a4', marginBottom: 14, letterSpacing: 0.3 },
   skeleton: {
-    minHeight: 330,
-    borderRadius: 8,
-    background: 'linear-gradient(90deg, #111716 0%, #1b2521 50%, #111716 100%)',
+    background: 'linear-gradient(90deg, #0f1614 25%, #162018 50%, #0f1614 75%)',
     backgroundSize: '200% 100%',
-    border: '1px solid #2a3834'
-  }
+    animation: 'shimmer 1.4s infinite',
+    borderRadius: 6, height: 220,
+  },
+  empty: { color: '#4a5e58', fontSize: 14, padding: 24 },
+  tooltip: {
+    background: '#0d1a16', border: '1px solid #2a3a35',
+    borderRadius: 6, fontSize: 12, color: '#c8d6d2',
+  },
 };
 
-const axisStyle = { fill: '#8fa29b', fontSize: 11 };
-
-export default function ChartPanel({ charts, rows, loading, stats }) {
-  if (loading) {
-    return (
-      <div style={styles.grid}>
-        {[0, 1, 2].map((item) => (
-          <div key={item} style={styles.skeleton} />
-        ))}
-      </div>
-    );
-  }
-
-  if (!stats.length) {
-    return <div style={styles.empty}>Charts require at least one numeric column for the y-axis.</div>;
-  }
-
-  if (!charts.length) {
-    return <div style={styles.empty}>Click Analyze to generate the three automatic chart selections.</div>;
-  }
-
+function CustomTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
   return (
-    <div style={styles.grid}>
-      {charts.map((chart, index) => (
-        <article key={`${chart.title}-${index}`} style={styles.panel}>
-          <h3 style={styles.title}>{chart.title}</h3>
-          <ResponsiveContainer width="100%" height={270}>
-            {renderChart(chart, buildChartRows(rows, chart))}
-          </ResponsiveContainer>
-        </article>
+    <div style={S.tooltip}>
+      <div style={{ padding: '8px 12px', borderBottom: '1px solid #1e2e28', color: '#88a09a', fontSize: 11 }}>{label}</div>
+      {payload.map((p, i) => (
+        <div key={i} style={{ padding: '4px 12px', color: p.color }}>
+          {p.name}: <strong>{typeof p.value === 'number' ? p.value.toLocaleString(undefined, { maximumFractionDigits: 3 }) : p.value}</strong>
+        </div>
       ))}
     </div>
   );
 }
 
-function buildChartRows(rows, chart) {
+function prepareData(rows, xCol, yCol) {
   return rows
-    .map((row) => ({
-      x: row[chart.x],
-      y: toNumber(row[chart.y]),
-      rawX: row[chart.x]
-    }))
-    .filter((row) => Number.isFinite(row.y) && row.x !== undefined && row.x !== '')
-    .slice(0, 300);
+    .map((r) => ({ x: r[xCol], y: parseFloat(r[yCol]) }))
+    .filter((d) => !isNaN(d.y) && d.x != null && d.x !== '');
 }
 
-function renderChart(chart, data) {
-  if (chart.type === 'scatter') {
-    const scatterData = data
-      .map((row) => ({ x: toNumber(row.rawX), y: row.y }))
-      .filter((row) => Number.isFinite(row.x) && Number.isFinite(row.y));
-    return (
-      <ScatterChart data={scatterData}>
-        <CartesianGrid stroke="#26332f" />
-        <XAxis type="number" dataKey="x" name={chart.x} tick={axisStyle} stroke="#4b5f58" />
-        <YAxis type="number" dataKey="y" name={chart.y} tick={axisStyle} stroke="#4b5f58" />
-        <Tooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={tooltipStyle} />
-        <Scatter dataKey="y" fill="#d49b33" isAnimationActive />
+function ChartCard({ chart, rows, color, thresholds }) {
+  const data = prepareData(rows, chart.x, chart.y);
+  if (!data.length) return null;
+
+  const thresh = thresholds?.[chart.y];
+  const axisStyle = { fill: '#4a5e58', fontSize: 11 };
+  const gridProps = { stroke: '#1a2820', strokeDasharray: '3 3' };
+
+  const commonProps = {
+    data,
+    margin: { top: 4, right: 12, left: 0, bottom: 4 },
+  };
+
+  let inner;
+  if (chart.type === 'line') {
+    inner = (
+      <LineChart {...commonProps}>
+        <CartesianGrid {...gridProps} />
+        <XAxis dataKey="x" tick={axisStyle} tickLine={false} interval="preserveStartEnd" />
+        <YAxis tick={axisStyle} tickLine={false} axisLine={false} width={55} />
+        <Tooltip content={<CustomTooltip />} />
+        {thresh?.warn && <ReferenceLine y={parseFloat(thresh.warn)} stroke="#fb923c" strokeDasharray="4 2" label={{ value: 'WARN', fill: '#fb923c', fontSize: 10 }} />}
+        {thresh?.critical && <ReferenceLine y={parseFloat(thresh.critical)} stroke="#f87171" strokeDasharray="4 2" label={{ value: 'CRIT', fill: '#f87171', fontSize: 10 }} />}
+        <Line type="monotone" dataKey="y" name={chart.y} stroke={color} strokeWidth={2} dot={false} activeDot={{ r: 4, fill: color }} />
+      </LineChart>
+    );
+  } else if (chart.type === 'bar') {
+    inner = (
+      <BarChart {...commonProps}>
+        <CartesianGrid {...gridProps} />
+        <XAxis dataKey="x" tick={axisStyle} tickLine={false} interval="preserveStartEnd" />
+        <YAxis tick={axisStyle} tickLine={false} axisLine={false} width={55} />
+        <Tooltip content={<CustomTooltip />} />
+        {thresh?.warn && <ReferenceLine y={parseFloat(thresh.warn)} stroke="#fb923c" strokeDasharray="4 2" />}
+        {thresh?.critical && <ReferenceLine y={parseFloat(thresh.critical)} stroke="#f87171" strokeDasharray="4 2" />}
+        <Bar dataKey="y" name={chart.y} fill={color} radius={[3, 3, 0, 0]} maxBarSize={32} />
+      </BarChart>
+    );
+  } else {
+    inner = (
+      <ScatterChart {...commonProps}>
+        <CartesianGrid {...gridProps} />
+        <XAxis dataKey="x" name={chart.x} tick={axisStyle} tickLine={false} type="number" />
+        <YAxis dataKey="y" name={chart.y} tick={axisStyle} tickLine={false} axisLine={false} width={55} />
+        <Tooltip cursor={{ strokeDasharray: '3 3' }} content={<CustomTooltip />} />
+        <Scatter name={chart.y} fill={color} opacity={0.7} />
       </ScatterChart>
     );
   }
 
-  if (chart.type === 'bar') {
-    const grouped = aggregateByX(data);
-    return (
-      <BarChart data={grouped}>
-        <CartesianGrid stroke="#26332f" />
-        <XAxis dataKey="x" tick={axisStyle} stroke="#4b5f58" minTickGap={18} />
-        <YAxis tick={axisStyle} stroke="#4b5f58" />
-        <Tooltip contentStyle={tooltipStyle} />
-        <Bar dataKey="y" fill="#6cc9f0" radius={[4, 4, 0, 0]} isAnimationActive />
-      </BarChart>
-    );
-  }
-
   return (
-    <LineChart data={data}>
-      <CartesianGrid stroke="#26332f" />
-      <XAxis dataKey="x" tick={axisStyle} stroke="#4b5f58" minTickGap={18} />
-      <YAxis tick={axisStyle} stroke="#4b5f58" />
-      <Tooltip contentStyle={tooltipStyle} />
-      <Line type="monotone" dataKey="y" stroke="#55d68c" strokeWidth={2} dot={false} isAnimationActive />
-    </LineChart>
+    <div style={S.card}>
+      <div style={S.title}>{chart.title}</div>
+      <ResponsiveContainer width="100%" height={220}>{inner}</ResponsiveContainer>
+    </div>
   );
 }
 
-function aggregateByX(data) {
-  const buckets = new Map();
-  data.forEach((row) => {
-    const key = String(row.x);
-    const current = buckets.get(key) || { x: key, total: 0, count: 0 };
-    current.total += row.y;
-    current.count += 1;
-    buckets.set(key, current);
-  });
-  return [...buckets.values()]
-    .map((bucket) => ({ x: bucket.x, y: bucket.total / bucket.count }))
-    .slice(0, 40);
-}
+export default function ChartPanel({ charts, rows, loading, thresholds }) {
+  if (loading) {
+    return (
+      <>
+        <style>{`@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }`}</style>
+        <div style={S.grid}>
+          {[0, 1, 2].map((i) => (
+            <div key={i} style={S.card}>
+              <div style={{ ...S.skeleton, height: 14, width: '40%', marginBottom: 14 }} />
+              <div style={S.skeleton} />
+            </div>
+          ))}
+        </div>
+      </>
+    );
+  }
 
-const tooltipStyle = {
-  background: '#0c1112',
-  border: '1px solid #33433e',
-  color: '#edf4ef',
-  borderRadius: 6
-};
+  if (!charts.length) return <div style={S.empty}>No charts generated yet.</div>;
+
+  return (
+    <div style={S.grid}>
+      {charts.map((chart, i) => (
+        <ChartCard key={i} chart={chart} rows={rows} color={COLORS[i % COLORS.length]} thresholds={thresholds} />
+      ))}
+    </div>
+  );
+}

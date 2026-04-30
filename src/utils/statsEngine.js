@@ -1,46 +1,61 @@
 export function computeNumericStats(rows, columns) {
-  const numericColumns = columns.filter((column) => column.type === 'numeric');
-  return numericColumns.map((column) => {
-    const rawValues = rows.map((row) => row[column.name]);
-    const values = rawValues.map(toNumber).filter((value) => Number.isFinite(value));
-    const nullCount = rawValues.length - values.length;
-    const sorted = [...values].sort((a, b) => a - b);
-    const mean = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
-    const variance =
-      values.length > 1
-        ? values.reduce((sum, value) => sum + Math.pow(value - mean, 2), 0) / (values.length - 1)
-        : 0;
+  const numericCols = columns.filter((c) => c.type === 'numeric').map((c) => c.name);
+  return numericCols.map((col) => {
+    const raw = rows.map((r) => r[col]);
+    const nullCount = raw.filter((v) => v === '' || v == null).length;
+    const values = raw
+      .filter((v) => v !== '' && v != null)
+      .map((v) => parseFloat(v))
+      .filter((v) => !isNaN(v));
 
-    return {
-      column: column.name,
-      count: values.length,
-      nullCount,
-      min: values.length ? sorted[0] : null,
-      max: values.length ? sorted[sorted.length - 1] : null,
-      mean,
-      median: median(sorted),
-      stdDev: values.length ? Math.sqrt(variance) : null
-    };
+    if (!values.length) {
+      return { column: col, mean: null, std: null, min: null, max: null, median: null, nullCount, anomalies: [] };
+    }
+
+    const sorted = [...values].sort((a, b) => a - b);
+    const min = sorted[0];
+    const max = sorted[sorted.length - 1];
+    const mean = values.reduce((s, v) => s + v, 0) / values.length;
+    const median = sorted.length % 2 === 0
+      ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
+      : sorted[Math.floor(sorted.length / 2)];
+    const variance = values.reduce((s, v) => s + (v - mean) ** 2, 0) / values.length;
+    const std = Math.sqrt(variance);
+
+    // Anomaly detection: flag row indices where value is > 3 std from mean
+    const anomalies = [];
+    rows.forEach((row, idx) => {
+      const v = parseFloat(row[col]);
+      if (!isNaN(v) && Math.abs(v - mean) > 3 * std) {
+        anomalies.push({ rowIndex: idx, value: v, zScore: ((v - mean) / std).toFixed(2) });
+      }
+    });
+
+    return { column: col, mean, std, min, max, median, nullCount, anomalies };
   });
 }
 
-export function toNumber(value) {
-  const text = String(value ?? '').trim().replace(/,/g, '');
-  if (text === '') return NaN;
-  const number = Number(text);
-  return Number.isFinite(number) ? number : NaN;
+export function detectAnomalyRows(rows, numericStats) {
+  const anomalyRowSet = new Set();
+  numericStats.forEach((stat) => {
+    stat.anomalies.forEach(({ rowIndex }) => anomalyRowSet.add(rowIndex));
+  });
+  return anomalyRowSet;
 }
 
-export function formatNumber(value) {
-  if (value === null || value === undefined || Number.isNaN(value)) return 'n/a';
-  const absolute = Math.abs(value);
-  const digits = absolute >= 1000 || absolute === 0 ? 0 : absolute < 1 ? 3 : 2;
-  return new Intl.NumberFormat('en-US', { maximumFractionDigits: digits }).format(value);
-}
-
-function median(sorted) {
-  if (!sorted.length) return null;
-  const middle = Math.floor(sorted.length / 2);
-  if (sorted.length % 2) return sorted[middle];
-  return (sorted[middle - 1] + sorted[middle]) / 2;
+export function computeThresholdBreaches(rows, thresholds, numericStats) {
+  // thresholds: { colName: { warn: number|null, critical: number|null } }
+  const breaches = [];
+  Object.entries(thresholds).forEach(([col, limits]) => {
+    rows.forEach((row, idx) => {
+      const v = parseFloat(row[col]);
+      if (isNaN(v)) return;
+      if (limits.critical != null && v >= limits.critical) {
+        breaches.push({ rowIndex: idx, column: col, value: v, level: 'critical' });
+      } else if (limits.warn != null && v >= limits.warn) {
+        breaches.push({ rowIndex: idx, column: col, value: v, level: 'warn' });
+      }
+    });
+  });
+  return breaches;
 }
