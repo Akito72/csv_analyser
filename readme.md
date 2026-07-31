@@ -6,8 +6,6 @@ A full-stack web app for operations and maintenance teams to drop in a CSV and i
 
 ## Screenshots
 
-> Replace the images below with your own after running the app.
-
 **Upload & Data Preview**
 ![alt text](image.png)
 
