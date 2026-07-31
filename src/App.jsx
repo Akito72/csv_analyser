@@ -146,19 +146,61 @@ export default function App() {
       } finally { setLoading(false); }
     })();
 
-    // Insight
+    // Insight — streamed over SSE so the terminal panel types out the report
+    // token-by-token instead of sitting on a loading skeleton for the full
+    // 200-300 word completion. Falls back to the non-streaming endpoint if
+    // the stream errors before any content arrives.
     (async () => {
       setInsightLoading(true);
       try {
-        const res = await fetch('/api/insight', {
+        const res = await fetch('/api/insight/stream', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Insight failed.');
-        setInsightReport(data.report || '');
+        if (!res.ok || !res.body) throw new Error(`Insight stream failed (${res.status}).`);
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let accumulated = '';
+        let sawFirstToken = false;
+
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const events = buffer.split('\n\n');
+          buffer = events.pop(); // last chunk may be incomplete
+
+          for (const evt of events) {
+            const line = evt.trim();
+            if (!line.startsWith('data:')) continue;
+            const json = JSON.parse(line.slice(5).trim());
+            if (json.error) throw new Error(json.error);
+            if (json.delta) {
+              accumulated += json.delta;
+              if (!sawFirstToken) { sawFirstToken = true; setInsightLoading(false); }
+              setInsightReport(accumulated);
+            }
+            if (json.done) return;
+          }
+        }
       } catch (err) {
-        setInsightReport(`Insight unavailable: ${err.message}`);
+        // Fallback to the plain request/response endpoint if streaming
+        // itself failed (e.g. proxy buffering, older browser).
+        try {
+          const res = await fetch('/api/insight', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Insight failed.');
+          setInsightReport(data.report || '');
+        } catch (fallbackErr) {
+          setInsightReport(`Insight unavailable: ${fallbackErr.message}`);
+        }
       } finally { setInsightLoading(false); }
     })();
   }, [dataset, numericStats]);
